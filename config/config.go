@@ -47,6 +47,7 @@ type Config struct {
 	Host             string          `toml:"host" json:"host"`
 	AdvertiseAddress string          `toml:"advertise-address" json:"advertise-address"`
 	Port             uint            `toml:"port" json:"port"`
+	PgPort           uint            `toml:"pg-port" json:"pg-port"`
 	Store            string          `toml:"store" json:"store"`
 	Path             string          `toml:"path" json:"path"`
 	Socket           string          `toml:"socket" json:"socket"`

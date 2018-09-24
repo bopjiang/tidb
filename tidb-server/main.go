@@ -285,6 +285,12 @@ func overrideConfig() {
 		terror.MustNil(err)
 		cfg.Port = uint(p)
 	}
+	if actualFlags[nmPgPort] {
+		var p int
+		p, err = strconv.Atoi(*port)
+		terror.MustNil(err)
+		cfg.PgPort = uint(p)
+	}
 	if actualFlags[nmStore] {
 		cfg.Store = *store
 	}
