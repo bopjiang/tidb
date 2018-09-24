@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	proxyprotocol "github.com/blacktear23/go-proxyprotocol"
@@ -21,6 +22,8 @@ type Server struct {
 	tlsConfig *tls.Config
 	driver    server.IDriver
 	listener  net.Listener
+	rwlock    *sync.RWMutex
+	clients   map[uint32]*clientConn
 }
 
 // NewServer creates a PostgreSQL protocol server
@@ -85,6 +88,37 @@ func (s *Server) Run() error {
 
 func (s *Server) onConn(c net.Conn) {
 	log.Debugf("pg new connection, %s->%s", c.RemoteAddr(), c.LocalAddr())
-	//err := c.Close()
-	//terror.Log(errors.Trace(err))
+	conn := s.newConn(c)
+	if err := conn.handshake(); err != nil {
+		// Some keep alive services will send request to TiDB and disconnect immediately.
+		// So we only record metrics.
+		metrics.HandShakeErrorCounter.Inc()
+		err = c.Close()
+		terror.Log(errors.Trace(err))
+		return
+	}
+	log.Infof("con:%d new connection %s", conn.connectionID, c.RemoteAddr().String())
+	defer func() {
+		log.Infof("con:%d close connection", conn.connectionID)
+	}()
+	s.rwlock.Lock()
+	s.clients[conn.connectionID] = conn
+	connections := len(s.clients)
+	s.rwlock.Unlock()
+	metrics.ConnGauge.Set(float64(connections))
+
+	conn.Run()
+}
+
+func (s *Server) newConn(conn net.Conn) *clientConn {
+	cc := newClientConn(s)
+	if s.cfg.Performance.TCPKeepAlive {
+		if tcpConn, ok := conn.(*net.TCPConn); ok {
+			if err := tcpConn.SetKeepAlive(true); err != nil {
+				log.Error("failed to set tcp keep alive option:", err)
+			}
+		}
+	}
+	cc.setConn(conn)
+	return cc
 }
