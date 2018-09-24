@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/tidb/domain"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/metrics"
+	"github.com/pingcap/tidb/pgserver"
 	"github.com/pingcap/tidb/plan"
 	"github.com/pingcap/tidb/privilege/privileges"
 	"github.com/pingcap/tidb/server"
@@ -46,6 +47,7 @@ import (
 	"github.com/pingcap/tidb/util/logutil"
 	"github.com/pingcap/tidb/util/printer"
 	"github.com/pingcap/tidb/util/systimemon"
+	"github.com/pingcap/tidb/util/wgutil"
 	"github.com/pingcap/tidb/x-server"
 	binlog "github.com/pingcap/tipb/go-binlog"
 	"github.com/pkg/errors"
@@ -64,6 +66,7 @@ const (
 	nmHost             = "host"
 	nmAdvertiseAddress = "advertise-address"
 	nmPort             = "P"
+	nmPgPort           = "pgPort"
 	nmSocket           = "socket"
 	nmBinlogSocket     = "binlog-socket"
 	nmRunDDL           = "run-ddl"
@@ -91,6 +94,7 @@ var (
 	host             = flag.String(nmHost, "0.0.0.0", "tidb server host")
 	advertiseAddress = flag.String(nmAdvertiseAddress, "", "tidb server advertise IP")
 	port             = flag.String(nmPort, "4000", "tidb server port")
+	pgPort           = flag.String(nmPgPort, "4002", "tidb postgresql server port")
 	socket           = flag.String(nmSocket, "", "The socket file to use for connection.")
 	binlogSocket     = flag.String(nmBinlogSocket, "", "socket file to write binlog")
 	runDDL           = flagBoolean(nmRunDDL, true, "run ddl worker on this tidb-server")
@@ -118,8 +122,11 @@ var (
 	storage  kv.Storage
 	dom      *domain.Domain
 	svr      *server.Server
+	pgSvr    *pgserver.Server
 	xsvr     *xserver.Server
 	graceful bool
+
+	wg wgutil.WaitGroupWrapper
 )
 
 func main() {
@@ -425,6 +432,9 @@ func createServer() {
 	svr, err = server.NewServer(cfg, driver)
 	// Both domain and storage have started, so we have to clean them before exiting.
 	terror.MustNil(err, closeDomainAndStorage)
+
+	pgSvr, err = pgserver.NewServer(cfg, driver)
+
 	if cfg.XProtocol.XServer {
 		xcfg := &xserver.Config{
 			Addr:       fmt.Sprintf("%s:%d", cfg.XProtocol.XHost, cfg.XProtocol.XPort),
@@ -499,12 +509,24 @@ func setupTracing() {
 }
 
 func runServer() {
-	err := svr.Run()
-	terror.MustNil(err)
-	if cfg.XProtocol.XServer {
-		err := xsvr.Run()
+	wg.Wrap(func() {
+		err := svr.Run()
 		terror.MustNil(err)
+	})
+
+	wg.Wrap(func() {
+		err := pgSvr.Run()
+		terror.MustNil(err)
+	})
+
+	if cfg.XProtocol.XServer {
+		wg.Wrap(func() {
+			err := xsvr.Run()
+			terror.MustNil(err)
+		})
 	}
+
+	wg.Wait()
 }
 
 func closeDomainAndStorage() {
