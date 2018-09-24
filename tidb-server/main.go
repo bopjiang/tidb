@@ -94,7 +94,7 @@ var (
 	host             = flag.String(nmHost, "0.0.0.0", "tidb server host")
 	advertiseAddress = flag.String(nmAdvertiseAddress, "", "tidb server advertise IP")
 	port             = flag.String(nmPort, "4000", "tidb server port")
-	pgPort           = flag.String(nmPgPort, "4002", "tidb postgresql server port")
+	pgPort           = flag.String(nmPgPort, "4020", "tidb postgresql server port")
 	socket           = flag.String(nmSocket, "", "The socket file to use for connection.")
 	binlogSocket     = flag.String(nmBinlogSocket, "", "socket file to write binlog")
 	runDDL           = flagBoolean(nmRunDDL, true, "run ddl worker on this tidb-server")
@@ -287,7 +287,7 @@ func overrideConfig() {
 	}
 	if actualFlags[nmPgPort] {
 		var p int
-		p, err = strconv.Atoi(*port)
+		p, err = strconv.Atoi(*pgPort)
 		terror.MustNil(err)
 		cfg.PgPort = uint(p)
 	}
@@ -440,6 +440,7 @@ func createServer() {
 	terror.MustNil(err, closeDomainAndStorage)
 
 	pgSvr, err = pgserver.NewServer(cfg, driver)
+	terror.MustNil(err, closeDomainAndStorage)
 
 	if cfg.XProtocol.XServer {
 		xcfg := &xserver.Config{
