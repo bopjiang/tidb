@@ -36,7 +36,12 @@ func NewServer(cfg *config.Config, driver server.IDriver) (*Server, error) {
 		log.Infof("Server is running PostgreSQ Protocol at [%s]", addr)
 	}
 
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
 	// TODO: Proxy server
+	log.Infof("Server run PostgreSQL Protocol Listen at [%s]", addr)
 
 	return s, nil
 }

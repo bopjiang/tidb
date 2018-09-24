@@ -66,7 +66,7 @@ const (
 	nmHost             = "host"
 	nmAdvertiseAddress = "advertise-address"
 	nmPort             = "P"
-	nmPgPort           = "pgPort"
+	nmPgPort           = "pg-port"
 	nmSocket           = "socket"
 	nmBinlogSocket     = "binlog-socket"
 	nmRunDDL           = "run-ddl"
