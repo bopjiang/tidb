@@ -57,8 +57,10 @@ type Server struct {
 // NewServer creates a PostgreSQL protocol server
 func NewServer(cfg *config.Config, driver server.IDriver) (*Server, error) {
 	s := &Server{
-		cfg:    cfg,
-		driver: driver,
+		cfg:     cfg,
+		driver:  driver,
+		rwlock:  &sync.RWMutex{},
+		clients: make(map[uint32]*clientConn),
 	}
 
 	var err error
@@ -125,7 +127,7 @@ func (s *Server) onConn(c net.Conn) {
 		terror.Log(errors.Trace(err))
 		return
 	}
-	log.Infof("con:%d new connection %s", conn.connectionID, c.RemoteAddr().String())
+	log.Infof("pgcon:%d new connection %s", conn.connectionID, c.RemoteAddr().String())
 	defer func() {
 		log.Infof("con:%d close connection", conn.connectionID)
 	}()

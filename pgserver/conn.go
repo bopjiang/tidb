@@ -37,11 +37,17 @@ package pgserver
 import (
 	"context"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/mysql"
+	"github.com/pingcap/tidb/server"
+	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/util/arena"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // TODO: baseConnID,connStatus: share with mysql server?
@@ -65,6 +71,8 @@ type clientConn struct {
 	dbname       string            // default database name.
 	alloc        arena.Allocator   // an memory allocator for reducing memory allocation.
 	status       int32             // dispatching/reading/shutdown/waitshutdown
+	ctx          server.QueryCtx   // an interface to execute sql statements.
+	lastCmd      string            // latest sql query string, currently used for logging error.
 
 	// mu is used for cancelling the execution of current transaction.
 	mu struct {
@@ -93,5 +101,35 @@ func (cc *clientConn) handshake() error {
 }
 
 func (cc *clientConn) Run() {
+	const size = 4096
+	closedOutside := false
+	defer func() {
+		r := recover()
+		if r != nil {
+			buf := make([]byte, size)
+			stackSize := runtime.Stack(buf, false)
+			buf = buf[:stackSize]
+			log.Errorf("lastCmd %s, %v, %s", cc.lastCmd, r, buf)
+			metrics.PanicCounter.WithLabelValues(metrics.LabelSession).Inc()
+		}
+		if !closedOutside {
+			err := cc.Close()
+			terror.Log(errors.Trace(err))
+		}
+	}()
 
+}
+
+func (cc *clientConn) Close() error {
+	cc.server.rwlock.Lock()
+	delete(cc.server.clients, cc.connectionID)
+	connections := len(cc.server.clients)
+	cc.server.rwlock.Unlock()
+	metrics.ConnGauge.Set(float64(connections))
+	err := cc.bufReadConn.Close()
+	terror.Log(errors.Trace(err))
+	if cc.ctx != nil {
+		return cc.ctx.Close()
+	}
+	return nil
 }
