@@ -35,7 +35,9 @@
 package pgserver
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"runtime"
 	"sync"
@@ -63,17 +65,16 @@ const (
 )
 
 type clientConn struct {
-	bufReadConn  *bufferedReadConn // a buffered-read net.Conn or buffered-read tls.Conn.
-	server       *Server           // a reference of pg server instance.
-	connectionID uint32            // atomically allocated by a global variable, unique in process scope.
-	collation    uint8             // collation used by client, may be different from the collation used by database.
-	user         string            // user of the client.
-	dbname       string            // default database name.
-	alloc        arena.Allocator   // an memory allocator for reducing memory allocation.
-	status       int32             // dispatching/reading/shutdown/waitshutdown
-	ctx          server.QueryCtx   // an interface to execute sql statements.
-	lastCmd      string            // latest sql query string, currently used for logging error.
-
+	pkt          *packetIO
+	server       *Server         // a reference of pg server instance.
+	connectionID uint32          // atomically allocated by a global variable, unique in process scope.
+	collation    uint8           // collation used by client, may be different from the collation used by database.
+	user         string          // user of the client.
+	dbname       string          // default database name.
+	alloc        arena.Allocator // an memory allocator for reducing memory allocation.
+	status       int32           // dispatching/reading/shutdown/waitshutdown
+	ctx          server.QueryCtx // an interface to execute sql statements.
+	lastCmd      string          // latest sql query string, currently used for logging error.
 	// mu is used for cancelling the execution of current transaction.
 	mu struct {
 		sync.RWMutex
@@ -93,10 +94,44 @@ func newClientConn(s *Server) *clientConn {
 }
 
 func (cc *clientConn) setConn(conn net.Conn) {
-	cc.bufReadConn = newBufferedReadConn(conn)
+	cc.pkt = newPacketIO(conn)
 }
 
+// Int32(80877103)
+// The SSL request code.
+// The value is chosen to contain 1234 in the most significant 16 bits, and 5679 in the least significant 16 bits. (To avoid confusion, this code must not be the same as any protocol version number.)
+var SSLRequestCode = []byte{0x04, 0xd2, 0x16, 0x2f}
+
 func (cc *clientConn) handshake() error {
+	// 1. read SSLRequest
+	data, err := cc.pkt.ReadStartupMessage()
+	if err != nil {
+		return err
+	}
+
+	if !bytes.Equal(data, SSLRequestCode) {
+		return fmt.Errorf("read wrong SSLRequestCode,%X", data)
+	}
+
+	// 2. write SSLRequest Response
+	// not support SSL yet
+	if err := cc.pkt.Write([]byte{0x4e}); err != nil { // N
+		return err
+	}
+
+	// 3. read StartupMessage
+	data, err = cc.pkt.ReadStartupMessage()
+	if err != nil {
+		return err
+	}
+
+	version := data[:4]
+	log.Debugf("conn %s, version=%X", cc, version)
+
+	return nil
+}
+
+func readKeyValuePair(data []byte) map[string]string {
 	return nil
 }
 
@@ -126,10 +161,16 @@ func (cc *clientConn) Close() error {
 	connections := len(cc.server.clients)
 	cc.server.rwlock.Unlock()
 	metrics.ConnGauge.Set(float64(connections))
-	err := cc.bufReadConn.Close()
+	err := cc.pkt.Close()
 	terror.Log(errors.Trace(err))
 	if cc.ctx != nil {
 		return cc.ctx.Close()
 	}
 	return nil
+}
+
+func (cc *clientConn) String() string {
+	return fmt.Sprintf("id:%d, addr:%s user:%s",
+		cc.connectionID, cc.pkt.conn.RemoteAddr(), cc.user,
+	)
 }

@@ -119,9 +119,15 @@ func (s *Server) Run() error {
 func (s *Server) onConn(c net.Conn) {
 	log.Debugf("pg new connection, %s->%s", c.RemoteAddr(), c.LocalAddr())
 	conn := s.newConn(c)
+
+	// startup phase
+	// Except for the initial startup-request message, this part of the protocol is driven by the server.
+	// https://www.postgresql.org/docs/current/static/protocol-overview.html
+
 	if err := conn.handshake(); err != nil {
 		// Some keep alive services will send request to TiDB and disconnect immediately.
 		// So we only record metrics.
+		log.Debugf("failed to handshark, %s", err)
 		metrics.HandShakeErrorCounter.Inc()
 		err = c.Close()
 		terror.Log(errors.Trace(err))
@@ -137,6 +143,10 @@ func (s *Server) onConn(c net.Conn) {
 	s.rwlock.Unlock()
 	metrics.ConnGauge.Set(float64(connections))
 
+	// normal operation phase
+	//
+	// There are a few cases (such as NOTIFY) wherein the backend will send unsolicited messages,
+	// but for the most part this portion of a session is driven by frontend requests.
 	conn.Run()
 }
 
