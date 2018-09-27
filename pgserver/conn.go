@@ -37,9 +37,13 @@ package pgserver
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -113,7 +117,7 @@ func (cc *clientConn) handshake() error {
 		return fmt.Errorf("read wrong SSLRequestCode,%X", data)
 	}
 
-	// 2. write SSLRequest Response
+	// 2. send SSLRequest Response
 	// not support SSL yet
 	if err := cc.pkt.Write([]byte{0x4e}); err != nil { // N
 		return err
@@ -127,12 +131,59 @@ func (cc *clientConn) handshake() error {
 
 	version := data[:4]
 	log.Debugf("conn %s, version=%X", cc, version)
+	params := readKeyValuePairs(data[4:])
+	log.Debugf("conn %s, paras=%+v", cc, params)
+	cc.user, _ = params["user"]
+	if cc.user == "" {
+		return errors.New("user not set in StartupMessage")
+	}
 
+	cc.dbname, _ = params["database"]
+	if cc.dbname == "" {
+		cc.dbname = cc.user // The database to connect to. Defaults to the user name.
+	}
+
+	// 4. send AuthenticationRequest, only MD5Password supported now
+	if err := cc.pkt.WriteMessage(MessageTypeAuthenticationRequest, buildAuthenticationMD5Password()); err != nil {
+		return err
+	}
+
+	// 5. read password message
+	tp, password, err := cc.pkt.ReadMessage()
+	if err != nil {
+		return err
+	}
+
+	if tp != MessageTypePasswordMessage {
+		return fmt.Errorf("need PasswordMessage, got %d", tp)
+	}
+
+	log.Debugf("conn %s, password=%X", cc, password)
 	return nil
 }
 
-func readKeyValuePair(data []byte) map[string]string {
-	return nil
+const md5EncryptedPassword uint32 = 5 // Specifies that an MD5-encrypted password is required.
+func buildAuthenticationMD5Password() []byte {
+	out := make([]byte, 8)
+	binary.BigEndian.PutUint32(out[:4], md5EncryptedPassword)
+	_, err := io.ReadFull(rand.Reader, out[4:])
+	terror.Log(errors.Trace(err))
+	return out
+}
+
+func readKeyValuePairs(data []byte) map[string]string {
+	kvs := make(map[string]string)
+	s := bytes.Split(data, []byte{0x00})
+	for i := 0; i+1 < len(s); i += 2 {
+		k := strings.TrimSpace(string(s[i]))
+		if k == "" {
+			continue
+		}
+
+		kvs[k] = string(s[i+1])
+	}
+
+	return kvs
 }
 
 func (cc *clientConn) Run() {
