@@ -280,7 +280,7 @@ func (cc *clientConn) WriteBackendKeyData(processID, secretKey int32) error {
 		return cc.werr
 	}
 
-	data := make([]byte, 0, 8)
+	data := make([]byte, 8)
 	binary.BigEndian.PutUint32(data[:4], uint32(processID))
 	binary.BigEndian.PutUint32(data[4:], uint32(secretKey))
 	cc.werr = cc.pkt.WriteMessage(MessageTypeBackendKeyData, data)
