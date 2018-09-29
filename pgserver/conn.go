@@ -227,7 +227,22 @@ func (cc *clientConn) Run() {
 			terror.Log(errors.Trace(err))
 		}
 	}()
+	for {
+		tp, data, err := cc.pkt.ReadMessage()
+		if err != nil {
+			log.Errorf("read message err %s, %s", cc, err)
+			goto EXIT
+		}
 
+		switch tp {
+		case MessageTypeSimpleQuery:
+			log.Debugf("recv simple query, %s, %s", cc, string(data))
+		default:
+			log.Debugf("recv unsupported data type, %s, %d, %s", cc, tp, string(data))
+		}
+	}
+
+EXIT:
 }
 
 func (cc *clientConn) Close() error {

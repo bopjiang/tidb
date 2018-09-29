@@ -11,4 +11,6 @@ const (
 	MessageTypeParameterStatus       MessageType = 'S' //B
 	MessageTypeBackendKeyData        MessageType = 'K' //B
 	MessageTypeReadyForQuery         MessageType = 'Z' //B
+	MessageTypeSimpleQuery           MessageType = 'Q' //F
+
 )
