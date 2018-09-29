@@ -74,8 +74,11 @@ func (pkt *packetIO) WriteMessage(tp MessageType, data []byte) error {
 	return pkt.w.Flush()
 }
 
-func (pkt *packetIO) Write(p []byte) error {
-	pkt.w.Write(p)
+func (pkt *packetIO) Write(p []byte) (int, error) {
+	return pkt.w.Write(p)
+}
+
+func (pkt *packetIO) Flush() error {
 	return pkt.w.Flush()
 }
 
