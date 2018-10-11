@@ -437,7 +437,7 @@ func createServer() {
 	var err error
 	svr, err = server.NewServer(cfg, driver)
 	// Both domain and storage have started, so we have to clean them before exiting.
-	terror.MustNil(err, closeDomainAndStorage)
+	//terror.MustNil(err, closeDomainAndStorage)
 
 	pgSvr, err = pgserver.NewServer(cfg, driver)
 	terror.MustNil(err, closeDomainAndStorage)

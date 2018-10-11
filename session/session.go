@@ -770,7 +770,7 @@ func (s *session) execute(ctx context.Context, sql string) (recordSets []ast.Rec
 	stmtNodes, err := s.ParseSQL(ctx, sql, charsetInfo, collation)
 	if err != nil {
 		s.rollbackOnError(ctx)
-		log.Warnf("con:%d parse error:\n%v\n%s", connID, err, sql)
+		log.Warnf("con:%d parse error: charsetInfo=[%s], collation=[%s]\n%v\n%s", connID, charsetInfo, collation, err, sql)
 		return nil, errors.Trace(err)
 	}
 	label := metrics.LblGeneral

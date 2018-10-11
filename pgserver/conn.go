@@ -46,12 +46,13 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pingcap/tidb/metrics"
-	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/server"
 	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/util/arena"
+	"github.com/pingcap/tidb/util/hack"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -72,7 +73,6 @@ type clientConn struct {
 	pkt          *packetIO
 	server       *Server         // a reference of pg server instance.
 	connectionID uint32          // atomically allocated by a global variable, unique in process scope.
-	collation    uint8           // collation used by client, may be different from the collation used by database.
 	user         string          // user of the client.
 	dbname       string          // default database name.
 	alloc        arena.Allocator // an memory allocator for reducing memory allocation.
@@ -86,6 +86,10 @@ type clientConn struct {
 	}
 
 	werr error // connection write error
+
+	// capability is mysql spec
+	capability uint32 // client capability affects the way server handles client request.
+	collation  uint8  // collation used by client, may be different from the collation used by database.
 }
 
 // newClientConn creates a *clientConn object.
@@ -93,7 +97,7 @@ func newClientConn(s *Server) *clientConn {
 	return &clientConn{
 		server:       s,
 		connectionID: atomic.AddUint32(&baseConnID, 1),
-		collation:    mysql.DefaultCollationID,
+		collation:    33, //change to 33, not mysql.DefaultCollationID,
 		alloc:        arena.NewAllocator(32 * 1024),
 		status:       connStatusDispatching,
 	}
@@ -163,6 +167,10 @@ func (cc *clientConn) handshake() error {
 
 	// TODO: 5.1 check password
 	// refer to: func (cc *clientConn) openSessionAndDoAuth(authData []byte) error {
+	cc.ctx, err = cc.server.driver.OpenCtx(uint64(cc.connectionID), cc.capability, cc.collation, cc.dbname, nil)
+	if err != nil {
+		return errors.Trace(err)
+	}
 
 	// 6. send auth OK, parameter status, backend key data
 	cc.WriteAuthenticationOk()
@@ -234,15 +242,119 @@ func (cc *clientConn) Run() {
 			goto EXIT
 		}
 
+		ctx, cancelFunc := context.WithTimeout(context.Background(), time.Second*30)
 		switch tp {
 		case MessageTypeSimpleQuery:
 			log.Debugf("recv simple query, %s, %s", cc, string(data))
+			cc.handleQuery(ctx, hack.String(data))
 		default:
 			log.Debugf("recv unsupported data type, %s, %d, %s", cc, tp, string(data))
 		}
+
+		cancelFunc()
 	}
 
 EXIT:
+}
+
+func (cc *clientConn) handleQuery(ctx context.Context, sql string) (err error) {
+	rs, err := cc.ctx.Execute(ctx, sql)
+	if err != nil {
+		metrics.ExecuteErrorCounter.WithLabelValues(metrics.ExecuteErrorToLabel(err)).Inc()
+		return errors.Trace(err)
+	}
+	if rs != nil {
+		if len(rs) == 1 {
+			err = cc.writeResultset(ctx, rs[0])
+		} else {
+			err = cc.writeMultiResultset(ctx, rs)
+		}
+	} else { // rs == nil  // TODO:
+		log.Debugf("--------- result set is nil")
+	}
+	return errors.Trace(err)
+}
+
+func (cc *clientConn) writeResultset(ctx context.Context, rs server.ResultSet) (runErr error) {
+	data := make([]byte, 4, 1024)
+	chk := rs.NewChunk()
+	gotColumnInfo := false
+	for {
+		// Here server.tidbResultSet implements Next method.
+		err := rs.Next(ctx, chk)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if !gotColumnInfo {
+			// We need to call Next before we get columns.
+			// Otherwise, we will get incorrect columns info.
+			columns := rs.Columns()
+			err = cc.writeColumnInfo(columns)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			gotColumnInfo = true
+		}
+		rowCount := chk.NumRows()
+		if rowCount == 0 {
+			break
+		}
+		for i := 0; i < rowCount; i++ {
+			data = data[0:2]
+			data, err := dumpTextRow(data, rs.Columns(), chk.GetRow(i))
+			if err != nil {
+				return errors.Trace(err)
+			}
+			if err := cc.writeDataRow(data); err != nil {
+				return errors.Trace(err)
+			}
+		}
+
+		cc.WriteCommandComplete("SELECT", rowCount) // TODO: Get query method
+	}
+
+	return errors.Trace(cc.WriteReadyForQuery())
+}
+
+func (cc *clientConn) writeDataRow(data []byte) error {
+	cc.werr = cc.pkt.WriteMessage(MessageTypeDataRow, data)
+	return nil
+}
+
+func (cc *clientConn) writeColumnInfo(columns []*server.ColumnInfo) error {
+	buf := bytes.NewBuffer(nil)
+	binary.Write(buf, binary.BigEndian, uint16(len(columns)))
+	for _, col := range columns {
+		// string: The field name.
+		buf.WriteString(col.Name)
+		buf.WriteByte(0x00)
+		// Int32: the object ID of the table,
+		// TODO: can not get from server.ColumnInfo
+		binary.Write(buf, binary.BigEndian, uint32(0))
+		// Int16: the attribute number of the column;
+		// TODO: can not get from server.ColumnInfo
+		binary.Write(buf, binary.BigEndian, uint16(0))
+
+		// Int32: The object ID of the field's data type.
+		oid, size := convertMysqlTypeToOid(col.Type)
+		binary.Write(buf, binary.BigEndian, oid)
+
+		// Int16: The data type size (see pg_type.typlen). Note that negative values denote variable-width types.
+		binary.Write(buf, binary.BigEndian, size)
+
+		// Int32: The type modifier (see pg_attribute.atttypmod). The meaning of the modifier is type-specific.
+		binary.Write(buf, binary.BigEndian, int32(-1))
+
+		// Int16: The format code being used for the field. Currently will be zero (text) or one (binary). In a RowDescription returned from the statement variant of Describe, the format code is not yet known and will always be zero.
+		binary.Write(buf, binary.BigEndian, int16(0))
+	}
+	cc.werr = cc.pkt.WriteMessage(MessageTypeRowDescription, buf.Bytes())
+	return cc.werr
+}
+
+func (cc *clientConn) writeMultiResultset(ctx context.Context, rs []server.ResultSet) (runErr error) {
+	log.Errorf("--------writeMultiResultset Not implemented--------")
+	return nil
 }
 
 func (cc *clientConn) Close() error {
@@ -307,6 +419,17 @@ func (cc *clientConn) WriteReadyForQuery() error {
 		return cc.werr
 	}
 	cc.pkt.WriteMessage(MessageTypeReadyForQuery, []byte{'I'})
+	cc.werr = cc.pkt.Flush()
+	return cc.werr
+}
+
+func (cc *clientConn) WriteCommandComplete(command string, rows int) error {
+	if cc.werr != nil {
+		return cc.werr
+	}
+
+	tag := fmt.Sprintf("%s %d", command, rows)
+	cc.pkt.WriteMessage(MessageTypeCommandComplete, []byte(tag))
 	cc.werr = cc.pkt.Flush()
 	return cc.werr
 }
