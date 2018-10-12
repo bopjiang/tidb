@@ -134,17 +134,19 @@ func dumpLengthEncodedString(buffer []byte, bytes []byte) []byte {
 	return buffer
 }
 
+// postgres use big endian
+
 func dumpUint16(buffer []byte, n uint16) []byte {
-	buffer = append(buffer, byte(n))
 	buffer = append(buffer, byte(n>>8))
+	buffer = append(buffer, byte(n))
 	return buffer
 }
 
 func dumpUint32(buffer []byte, n uint32) []byte {
-	buffer = append(buffer, byte(n))
-	buffer = append(buffer, byte(n>>8))
-	buffer = append(buffer, byte(n>>16))
 	buffer = append(buffer, byte(n>>24))
+	buffer = append(buffer, byte(n>>16))
+	buffer = append(buffer, byte(n>>8))
+	buffer = append(buffer, byte(n))
 	return buffer
 }
 
@@ -225,6 +227,7 @@ func dumpBinaryDateTime(data []byte, t types.Time, loc *time.Location) ([]byte, 
 }
 
 func dumpTextRow(buffer []byte, columns []*server.ColumnInfo, row chunk.Row) ([]byte, error) {
+	buffer = dumpUint16(buffer, uint16(len(columns)))
 	for i, col := range columns {
 		if row.IsNull(i) {
 			// TODO:

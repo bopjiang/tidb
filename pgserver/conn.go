@@ -172,6 +172,13 @@ func (cc *clientConn) handshake() error {
 		return errors.Trace(err)
 	}
 
+	if cc.dbname != "" {
+		err = cc.useDB(context.Background(), cc.dbname)
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
+
 	// 6. send auth OK, parameter status, backend key data
 	cc.WriteAuthenticationOk()
 	cc.WriteParameterStatus("application_name", "psql")
@@ -245,6 +252,7 @@ func (cc *clientConn) Run() {
 		ctx, cancelFunc := context.WithTimeout(context.Background(), time.Second*30)
 		switch tp {
 		case MessageTypeSimpleQuery:
+			data = data[:len(data)-1] // trim \00
 			log.Debugf("recv simple query, %s, %s", cc, string(data))
 			cc.handleQuery(ctx, hack.String(data))
 		default:
@@ -255,6 +263,17 @@ func (cc *clientConn) Run() {
 	}
 
 EXIT:
+}
+
+func (cc *clientConn) useDB(ctx context.Context, db string) (err error) {
+	// if input is "use `SELECT`", mysql client just send "SELECT"
+	// so we add `` around db.
+	_, err = cc.ctx.Execute(ctx, "use `"+db+"`")
+	if err != nil {
+		return errors.Trace(err)
+	}
+	cc.dbname = db
+	return
 }
 
 func (cc *clientConn) handleQuery(ctx context.Context, sql string) (err error) {
@@ -300,7 +319,7 @@ func (cc *clientConn) writeResultset(ctx context.Context, rs server.ResultSet) (
 			break
 		}
 		for i := 0; i < rowCount; i++ {
-			data = data[0:2]
+			data = data[:0]
 			data, err := dumpTextRow(data, rs.Columns(), chk.GetRow(i))
 			if err != nil {
 				return errors.Trace(err)
@@ -337,10 +356,10 @@ func (cc *clientConn) writeColumnInfo(columns []*server.ColumnInfo) error {
 
 		// Int32: The object ID of the field's data type.
 		oid, size := convertMysqlTypeToOid(col.Type)
-		binary.Write(buf, binary.BigEndian, oid)
+		binary.Write(buf, binary.BigEndian, int32(oid))
 
 		// Int16: The data type size (see pg_type.typlen). Note that negative values denote variable-width types.
-		binary.Write(buf, binary.BigEndian, size)
+		binary.Write(buf, binary.BigEndian, int16(size))
 
 		// Int32: The type modifier (see pg_attribute.atttypmod). The meaning of the modifier is type-specific.
 		binary.Write(buf, binary.BigEndian, int32(-1))
@@ -429,7 +448,7 @@ func (cc *clientConn) WriteCommandComplete(command string, rows int) error {
 	}
 
 	tag := fmt.Sprintf("%s %d", command, rows)
-	cc.pkt.WriteMessage(MessageTypeCommandComplete, []byte(tag))
+	cc.pkt.WriteMessage(MessageTypeCommandComplete, append([]byte(tag), 0x00))
 	cc.werr = cc.pkt.Flush()
 	return cc.werr
 }
