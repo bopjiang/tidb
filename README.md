@@ -1,3 +1,27 @@
+
+## TiDB PG Fork
+add PostgreSQL protocol support for TiDB
+
+### HOW TO
+Based on TiDB v2.0.7, we add a new port 4020 for PostgreSQL protocol.
+
+~~~bash
+$ psql -h 127.0.0.1 -p 4020 -U postgres
+
+test=# select name from t4;
+ name
+------
+ j1
+ j2
+(2 rows)
+~~~
+
+<br/>
+<br/>
+
+
+
+
 ![](docs/logo_with_text.png)
 
 [![Build Status](https://travis-ci.org/pingcap/tidb.svg?branch=master)](https://travis-ci.org/pingcap/tidb)
