@@ -45,7 +45,7 @@ const (
 func convertMysqlTypeToOid(typ uint8) (oid.Oid, int) {
 	switch typ {
 	case fieldTypeLong:
-		return oid.T__int4, 4
+		return oid.T_int4, 4
 	case fieldTypeBLOB:
 		return oid.T__text, -1
 	case fieldTypeVarChar:

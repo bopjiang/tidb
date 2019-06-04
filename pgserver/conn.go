@@ -343,16 +343,16 @@ func (cc *clientConn) writeDataRow(data []byte) error {
 func (cc *clientConn) writeColumnInfo(columns []*server.ColumnInfo) error {
 	buf := bytes.NewBuffer(nil)
 	binary.Write(buf, binary.BigEndian, uint16(len(columns)))
-	for _, col := range columns {
+	for i, col := range columns {
 		// string: The field name.
 		buf.WriteString(col.Name)
 		buf.WriteByte(0x00)
 		// Int32: the object ID of the table,
 		// TODO: can not get from server.ColumnInfo
-		binary.Write(buf, binary.BigEndian, uint32(0))
+		binary.Write(buf, binary.BigEndian, uint32(99999))
 		// Int16: the attribute number of the column;
 		// TODO: can not get from server.ColumnInfo
-		binary.Write(buf, binary.BigEndian, uint16(0))
+		binary.Write(buf, binary.BigEndian, uint16(i+1))
 
 		// Int32: The object ID of the field's data type.
 		oid, size := convertMysqlTypeToOid(col.Type)

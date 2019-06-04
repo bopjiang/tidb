@@ -47,6 +47,7 @@ import (
 	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 func parseNullTermString(b []byte) (str []byte, remain []byte) {
@@ -150,6 +151,14 @@ func dumpUint32(buffer []byte, n uint32) []byte {
 	return buffer
 }
 
+func dumpInt32(buffer []byte, n int32) []byte {
+	buffer = append(buffer, byte(n>>24))
+	buffer = append(buffer, byte(n>>16))
+	buffer = append(buffer, byte(n>>8))
+	buffer = append(buffer, byte(n))
+	return buffer
+}
+
 func dumpUint64(buffer []byte, n uint64) []byte {
 	buffer = append(buffer, byte(n))
 	buffer = append(buffer, byte(n>>8))
@@ -230,20 +239,22 @@ func dumpTextRow(buffer []byte, columns []*server.ColumnInfo, row chunk.Row) ([]
 	buffer = dumpUint16(buffer, uint16(len(columns)))
 	for i, col := range columns {
 		if row.IsNull(i) {
-			// TODO:
-			//buffer = append(buffer, 0xfb)
+			buffer = dumpInt32(buffer, -1)
 			continue
 		}
 
 		switch col.Type {
-		case mysql.TypeInt24, mysql.TypeLong:
-			buffer = dumpUint32(buffer, uint32(4))               // The length of the column value
-			buffer = dumpUint32(buffer, uint32(row.GetInt64(i))) // The value of the column
+		case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong:
+			data := []byte(strconv.FormatInt(row.GetInt64(i), 10))
+			buffer = dumpUint32(buffer, uint32(len(data))) // The length of the column value
+			buffer = append(buffer, data...)               // The value of the column
 		case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar, mysql.TypeBit,
 			mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 			data := row.GetBytes(i)
 			buffer = dumpUint32(buffer, uint32(len(data))) // The value of the column
 			buffer = append(buffer, data...)
+		default:
+			log.Errorf("invalid col type, %s", col.Type)
 		}
 
 	}
