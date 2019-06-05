@@ -254,7 +254,7 @@ func (cc *clientConn) Run() {
 		case MessageTypeSimpleQuery:
 			data = data[:len(data)-1] // trim \00
 			log.Debugf("recv simple query, %s, %s", cc, string(data))
-			cc.handleQuery(ctx, hack.String(data))
+			cc.handleQuery(ctx, hack.String(data)) // TODO: handle error for all tp
 		default:
 			log.Debugf("recv unsupported data type, %s, %d, %s", cc, tp, string(data))
 		}
@@ -277,7 +277,7 @@ func (cc *clientConn) useDB(ctx context.Context, db string) (err error) {
 }
 
 func (cc *clientConn) handleQuery(ctx context.Context, sql string) (err error) {
-	rs, err := cc.ctx.Execute(ctx, sql)
+	rs, err := cc.ctx.Execute(ctx, sql) // TODO: multiple SQL statement in one query.
 	if err != nil {
 		metrics.ExecuteErrorCounter.WithLabelValues(metrics.ExecuteErrorToLabel(err)).Inc()
 		return errors.Trace(err)
@@ -288,10 +288,15 @@ func (cc *clientConn) handleQuery(ctx context.Context, sql string) (err error) {
 		} else {
 			err = cc.writeMultiResultset(ctx, rs)
 		}
-	} else { // rs == nil  // TODO:
+	} else {
 		log.Debugf("--------- result set is nil")
+		err = cc.WriteCommandComplete("CREATE TABLE", -1) // TODO: get command from SQL
+		if err != nil {
+			return errors.Trace(err)
+		}
 	}
-	return errors.Trace(err)
+
+	return errors.Trace(cc.WriteReadyForQuery())
 }
 
 func (cc *clientConn) writeResultset(ctx context.Context, rs server.ResultSet) (runErr error) {
@@ -447,7 +452,13 @@ func (cc *clientConn) WriteCommandComplete(command string, rows int) error {
 		return cc.werr
 	}
 
-	tag := fmt.Sprintf("%s %d", command, rows)
+	tag := ""
+	if rows >= 0 {
+		tag = fmt.Sprintf("%s %d", command, rows)
+	} else {
+		tag = command
+	}
+
 	cc.pkt.WriteMessage(MessageTypeCommandComplete, append([]byte(tag), 0x00))
 	cc.werr = cc.pkt.Flush()
 	return cc.werr
