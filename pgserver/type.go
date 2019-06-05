@@ -18,4 +18,5 @@ const (
 	MessageTypeRowDescription        MessageType = 'T' //B
 	MessageTypeDataRow               MessageType = 'D' //B
 	MessageTypeCommandComplete       MessageType = 'C' //B
+	MessageTypeEmptyQueryResponse    MessageType = 'I' //B
 )

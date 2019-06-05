@@ -284,19 +284,17 @@ func (cc *clientConn) handleQuery(ctx context.Context, sql string) (err error) {
 	}
 	if rs != nil {
 		if len(rs) == 1 {
-			err = cc.writeResultset(ctx, rs[0])
+			cc.writeResultset(ctx, rs[0])
 		} else {
-			err = cc.writeMultiResultset(ctx, rs)
+			cc.writeMultiResultset(ctx, rs)
 		}
 	} else {
 		log.Debugf("--------- result set is nil")
-		err = cc.WriteCommandComplete("CREATE TABLE", -1) // TODO: get command from SQL
-		if err != nil {
-			return errors.Trace(err)
-		}
+		cc.WriteCommandComplete("CREATE TABLE", -1) // TODO: get command from SQL
+		cc.WriteReadyForQuery()
 	}
 
-	return errors.Trace(cc.WriteReadyForQuery())
+	return errors.Trace(cc.werr)
 }
 
 func (cc *clientConn) writeResultset(ctx context.Context, rs server.ResultSet) (runErr error) {
@@ -321,6 +319,7 @@ func (cc *clientConn) writeResultset(ctx context.Context, rs server.ResultSet) (
 		}
 		rowCount := chk.NumRows()
 		if rowCount == 0 {
+			err = cc.writeEmptyQueryResponse()
 			break
 		}
 		for i := 0; i < rowCount; i++ {
@@ -460,6 +459,16 @@ func (cc *clientConn) WriteCommandComplete(command string, rows int) error {
 	}
 
 	cc.pkt.WriteMessage(MessageTypeCommandComplete, append([]byte(tag), 0x00))
+	cc.werr = cc.pkt.Flush()
+	return cc.werr
+}
+
+func (cc *clientConn) writeEmptyQueryResponse() error {
+	if cc.werr != nil {
+		return cc.werr
+	}
+
+	cc.pkt.WriteMessage(MessageTypeEmptyQueryResponse, nil)
 	cc.werr = cc.pkt.Flush()
 	return cc.werr
 }

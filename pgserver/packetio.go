@@ -70,7 +70,9 @@ func (pkt *packetIO) ReadMessage() (MessageType, []byte, error) {
 func (pkt *packetIO) WriteMessage(tp MessageType, data []byte) error {
 	pkt.w.WriteByte(byte(tp))
 	binary.Write(pkt.w, binary.BigEndian, uint32(len(data)+4))
-	pkt.w.Write(data)
+	if len(data) > 0 {
+		pkt.w.Write(data)
+	}
 	return pkt.w.Flush()
 }
 
